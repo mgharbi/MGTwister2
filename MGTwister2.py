@@ -6,6 +6,7 @@ import Live
 
 from ableton.v2.base import const, inject, nop, depends, listens, liveobj_valid
 from ableton.v2.control_surface import ControlSurface, Skin, Layer, BankingInfo
+from ableton.v2.control_surface.device_parameter_bank import MaxDeviceParameterBank, DescribedDeviceParameterBank, DeviceParameterBank
 from ableton.v2.control_surface.elements import Color
 from ableton.v2.control_surface import MIDI_CC_TYPE, MIDI_NOTE_TYPE, ParameterProvider
 from ableton.v2.control_surface.components import (
@@ -83,6 +84,18 @@ class Colors(object):
             On = RGB.ORANGE
             Off = RGB.RED
 
+def custom_create_device_bank(device, banking_info):
+    bank = None
+    if liveobj_valid(device):
+        if banking_info.has_bank_count(device):
+            bank_class = MaxDeviceParameterBank
+        else:
+            if banking_info.device_bank_definition(device) is not None:
+                bank_class = DescribedDeviceParameterBank
+            else:
+                bank_class = DeviceParameterBank
+        bank = bank_class(device=device, size=16, banking_info=banking_info)
+    return bank
             
 class CustomEncoder(EncoderElement):
     def release_parameter(self):
@@ -100,10 +113,20 @@ class CustomDeviceComponent(DeviceComponent):
         return parameter
 
     def _current_bank_details(self):
+        logger.info(f"current bank detail: {self._bank}")
+        if self._bank is not None:
+            logger.info(f"bank name {self._bank.name} {self._bank.parameters}")
         if self._bank is not None:
             return (self._bank.name, self._bank.parameters)
         return (
          '', [None] * 16)
+
+    def _setup_bank(self, device, bank_factory=custom_create_device_bank):
+        if self._bank is not None:
+            self.disconnect_disconnectable(self._bank)
+            self._bank = None
+        if liveobj_valid(device):
+            self._bank = self.register_disconnectable(bank_factory(device, self._banking_info))
 
 class CustomDeviceParameterComponent(DeviceParameterComponent):
     controls = None
@@ -117,6 +140,7 @@ class CustomDeviceParameterComponent(DeviceParameterComponent):
             logger.info("no controls, not connecting")
             return
         logger.info(f"connecting {self.controls} {len(self.controls)}")
+        print("provider params:", self._parameter_provider.parameters, len(self._parameter_provider.parameters))
         parameters = self._parameter_provider.parameters[:len(self.controls)]
         logger.info(f"provider {self._parameter_provider} params: {len(parameters)}")
 
@@ -298,12 +322,12 @@ class MGTwister2(ControlSurface):
             parameter_provider=self._device,
             name="Device_Parameters_Component",
         )
-        logger.info(f"old provider: {self._device_parameters.parameter_provider}")
+        # logger.info(f"old provider: {self._device_parameters.parameter_provider}")
         # self._device_parameters.parameter_provider = self._device
         # self._device_parameters = SimpleDeviceParameterComponent(
         #     name="Device_Parameters_Component"
         # )
-        logger.info(f"Created device {type(self.device_provider)}")
+        # logger.info(f"Created device {type(self.device_provider)}")
 
         # TODO(bank next buttons)
 
@@ -436,3 +460,4 @@ class MGTwister2(ControlSurface):
 
     def disconnect(self):
         super().disconnect()
+
