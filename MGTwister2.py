@@ -394,13 +394,13 @@ class MGTwister2(ControlSurface):
                 #         next_bank_button="button_2_2",
                 #     ),
                 # ),
-                AddLayerMode(
-                    self._bank_nav,
-                    Layer(
-                        prev_bank_button="button_2_1",
-                        next_bank_button="button_2_2",
-                    ),
-                ),
+                # AddLayerMode(
+                #     self._bank_nav,
+                #     Layer(
+                #         prev_bank_button="button_2_1",
+                #         next_bank_button="button_2_2",
+                #     ),
+                # ),
                 AddLayerMode(
                     self._device_navigation,
                     Layer(
