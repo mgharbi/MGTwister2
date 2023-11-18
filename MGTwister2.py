@@ -4,14 +4,19 @@ from future.moves.itertools import zip_longest
 
 import Live
 
+import math
+
 from ableton.v2.base import const, inject, nop, depends, listens, liveobj_valid
 from ableton.v2.control_surface import ControlSurface, Skin, Layer, BankingInfo
 from ableton.v2.control_surface.device_parameter_bank import MaxDeviceParameterBank, DescribedDeviceParameterBank, DeviceParameterBank
 from ableton.v2.control_surface.elements import Color
+# from ableton.v3.control_surface.components.device_bank_navigation import DeviceBankNavigationComponent as DeviceBankNavigationComponentV3
 from ableton.v2.control_surface import MIDI_CC_TYPE, MIDI_NOTE_TYPE, ParameterProvider
+from ableton.v2.control_surface.control import ButtonControl
 from ableton.v2.control_surface.components import (
     SessionComponent,
     DeviceComponent,
+    DeviceNavigationComponent,
     DeviceParameterComponent,
     SessionRecordingComponent,
     SessionRingComponent,
@@ -36,6 +41,7 @@ from ableton.v2.control_surface.mode import (
     CompoundMode,
 )
 from novation.simple_device import SimpleDeviceParameterComponent
+from novation.simple_device_navigation import SimpleDeviceNavigationComponent
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,10 @@ class Colors(object):
         SoloOff = RGB.OFF
         TrackSelected = RGB.RED
         TrackNotSelected = RGB.ORANGE
+
+    class Device(object):
+        Navigation = RGB.ORANGE
+        NavigationPressed = RGB.RED
 
     class Mode(object):
         class Volume(object):
@@ -106,8 +116,15 @@ class CustomButton(ButtonElement):
     def release_parameter(self):
         super().release_parameter()
         self.reset()
+        
 
 class CustomDeviceComponent(DeviceComponent):
+
+    next_bank_button = ButtonControl(color='Device.Navigation',
+      pressed_color='Device.NavigationPressed')
+    prev_bank_button = ButtonControl(color='Device.Navigation',
+      pressed_color='Device.NavigationPressed')
+
     def _create_parameter_info(self, parameter, name):
         logger.info(f"custom device {parameter} {name}")
         return parameter
@@ -120,6 +137,14 @@ class CustomDeviceComponent(DeviceComponent):
             return (self._bank.name, self._bank.parameters)
         return (
          '', [None] * 16)
+
+    @next_bank_button.pressed
+    def next_bank_button(self, value):
+        logger.info(f"pressed_next_bank")
+
+    @prev_bank_button.pressed
+    def prev_bank_button(self, value):
+        logger.info(f"pressed_prev_bank")
 
     def _setup_bank(self, device, bank_factory=custom_create_device_bank):
         if self._bank is not None:
@@ -311,17 +336,24 @@ class MGTwister2(ControlSurface):
 
         self._create_mixer()
         self._create_device()
+        self._create_modes()
 
         # self._global_modes.add_mode(
         #     "mixer_mode", AddLayerMode(self._mixer_modes, Layer(enabled=True))
         # )
 
     def _create_device(self):
-        self._device = CustomDeviceComponent(banking_info=BankingInfo({}), device_bank_registry=self._device_bank_registry)
+        self._device = CustomDeviceComponent(
+            banking_info=BankingInfo({}), device_bank_registry=self._device_bank_registry)
+        # self._bank_nav = DeviceBankNavigationComponentV3(device_bank_registry=self._device_bank_registry)
         self._device_parameters = CustomDeviceParameterComponent(
             parameter_provider=self._device,
             name="Device_Parameters_Component",
         )
+
+        # self._device_navigation = DeviceNavigationComponent(self._device)
+        self._device_navigation = SimpleDeviceNavigationComponent()
+
         # logger.info(f"old provider: {self._device_parameters.parameter_provider}")
         # self._device_parameters.parameter_provider = self._device
         # self._device_parameters = SimpleDeviceParameterComponent(
@@ -331,6 +363,7 @@ class MGTwister2(ControlSurface):
 
         # TODO(bank next buttons)
 
+    def _create_modes(self):
         self._global_modes = ModesComponent(
             name="global_modes",
             is_enabled=False,
@@ -352,6 +385,27 @@ class MGTwister2(ControlSurface):
                     self._device_parameters,
                     Layer(
                         parameter_controls="encoders_matrix",
+                    ),
+                ),
+                # AddLayerMode(
+                #     self._device,
+                #     Layer(
+                #         prev_bank_button="button_2_1",
+                #         next_bank_button="button_2_2",
+                #     ),
+                # ),
+                AddLayerMode(
+                    self._bank_nav,
+                    Layer(
+                        prev_bank_button="button_2_1",
+                        next_bank_button="button_2_2",
+                    ),
+                ),
+                AddLayerMode(
+                    self._device_navigation,
+                    Layer(
+                        prev_button="button_3_1",
+                        next_button="button_3_2",
                     ),
                 ),
             ),
