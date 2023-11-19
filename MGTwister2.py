@@ -20,7 +20,7 @@ from ableton.v3.control_surface.components import (
     ViewControlComponent,
     SimpleDeviceNavigationComponent,
 )
-from ableton.v3.control_surface.mode import ModesComponent, AddLayerMode, CompoundMode
+from ableton.v3.control_surface.mode import ModesComponent, AddLayerMode, CompoundMode, EnablingAddLayerMode
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +94,14 @@ class TwisterElements(ElementsBase):
         for row in range(4):
             ids.append([])
             for col in range(4):
-                ids[-1].append(row+4*col)
-                self.add_encoder(identifier=ids[-1][-1], name="button_{col}_{row}", channel=0)
-                self.add_button(identifier=ids[-1][-1], name="button_{col}_{row}", channel=1)
+                ids[-1].append(col+4*row)
+                self.add_encoder(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=0)
+                self.add_button(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=1)
 
-        # Encoders 1-8
         self.add_encoder_matrix(
             identifiers=ids,
             base_name="encoders",
             channels=0,
-            # map_mode=MapMode.Absolute,
         )
         self.add_submatrix(self.encoders, "top_encoders", columns=(0, 4), rows=(0, 2))
         self.add_submatrix(self.encoders, "bottom_encoders", columns=(0, 4), rows=(2, 4))
@@ -113,64 +111,12 @@ class TwisterElements(ElementsBase):
             identifiers=ids,
             base_name="buttons",
             channels=1,
-            # map_mode=MapMode.Absolute,
         )
         self.add_submatrix(self.buttons, "top_buttons", columns=(0, 4), rows=(0, 2))
         self.add_submatrix(self.buttons, "bottom_buttons", columns=(0, 4), rows=(2, 4))
 
-        log(f"Elements methods: {dir(self)}")
-        log(f"RAW encoders: {self.encoders_raw}")
-        # self.add_submatrix(self.encoders, "encoders_top", columns=(0, 8))
-
-        # self.buttons = []
-        # self.encoders = []
-        # for y in range(4):
-        #     buttons_row = []
-        #     encoders_row = []
-        #     for x in range(4):
-        #         btn = create_button(0, x, y)
-        #         enc = create_encoder(0, x, y)
-        #         setattr(self, f"button_{y}_{x}", btn)
-        #         setattr(self, f"encoder_{y}_{x}", btn)
-        #         buttons_row.append(btn)
-        #         encoders_row.append(enc)
-        #     self.buttons.append(buttons_row)
-        #     self.encoders.append(encoders_row)
-
-        # self.buttons_matrix = ButtonMatrixElement(
-        #     rows=self.buttons,
-        #     name="buttons_matrix",
-        # )
-
-        # self.encoders_matrix = ButtonMatrixElement(
-        #     rows=self.encoders,
-        #     name="encoders_matrix",
-        # )
-
-        # for y in range(1, 4):
-        #     mtx = ButtonMatrixElement(
-        #         rows=self.encoders[:y],
-        #         name=f"encoders_top{y}",
-        #     )
-        #     setattr(self, f"encoders_top{y}", mtx)
-
-        #     mtx = ButtonMatrixElement(
-        #         rows=self.buttons[:y],
-        #         name=f"buttons_top{y}",
-        #     )
-        #     setattr(self, f"buttons_top{y}", mtx)
-
-        #     mtx = ButtonMatrixElement(
-        #         rows=self.encoders[4 - y :],
-        #         name=f"encoders_bottom{y}",
-        #     )
-        #     setattr(self, f"encoders_bottom{y}", mtx)
-
-        #     mtx = ButtonMatrixElement(
-        #         rows=self.buttons[4 - y :],
-        #         name=f"buttons_bottom{y}",
-        #     )
-        #     setattr(self, f"buttons_bottom{y}", mtx)
+        # log(f"Elements methods: {dir(self)}")
+        # log(f"RAW encoders: {self.encoders_raw}")
 
 def create_mappings(control_surface):
     mappings = {}
@@ -179,8 +125,16 @@ def create_mappings(control_surface):
     #     "num_scenes": control_surface.specification.num_scenes,
     #     "enable": True,
     # }
-    # mappings["Mixer"] = {
-    # }
+    mappings["Mixer"] = {
+    }
+    mappings["MixerMode"] = {
+        "modes_component_type": ModesComponent,
+        "enable": True,
+        "VolumeMode": {
+            "component": "Mixer",
+            "volume_controls": "top_encoders"
+        }
+    }
     return mappings
 
 def create_compoment_map():
@@ -206,6 +160,7 @@ class MGTwister2(ControlSurface):
     def __init__(self, c_instance):
         super().__init__(c_instance=c_instance, specification=Specification)
         log(f"components: {self.components}")
+        self.set_can_update_controlled_track(True)
 
     # def setup(self):
     #     super().setup()
@@ -221,18 +176,20 @@ class MGTwister2(ControlSurface):
     #     # # create modes
     #     # self._create_modes()
 
-    #     # self.set_can_update_controlled_track(True)
 
-    #     self.show_message("MGTwister2 v3 active")
 
     def setup(self):
-        log("Setup")
+        log("Base Setup")
+        # super().setup()
+
         self.component_map['Background'] = self._background
         self.component_map['Target_Track'] = self._target_track
-        # log(f"Compoment map {self.component_map}")
+
         log(f"Compoment names {self.component_map.keys()}")
+
         mappings = self.specification.create_mappings_function(self)
         log(f"mappings {mappings.keys()}")
+
         component_names = self.component_map.keys()
         for name in list(mappings.keys()):
             if name in component_names:
@@ -248,13 +205,15 @@ class MGTwister2(ControlSurface):
         log(f"Mixer: {self.component_map['Mixer']} {dir(self.component_map['Mixer'])}")
 
         mixer = self.component_map["Mixer"]
+        log(f"Mixer enabled? {mixer._is_enabled}")
+        mixer.set_enabled(True)
         session_navigation = self.component_map["Session_Navigation"]
 
-        self._mixer_modes = ModesComponent(
-            name="mixer_modes",
-            is_enabled=False,
-            # layer=Layer(cycle_mode_button="button_3_0"),
-        )
+        # self._mixer_modes = ModesComponent(
+        #     name="mixer_modes",
+        #     is_enabled=False,
+        #     layer=Layer(cycle_mode_button="button_3_0"),
+        # )
 
         # selected_track_controls = (
         #     AddLayerMode(
@@ -263,20 +222,19 @@ class MGTwister2(ControlSurface):
         #             mute_button="button_2_0",
         #             solo_button="button_2_1",
         #             arm_button="button_2_2",
-        #             send_controls="encoders_bottom2",
+        #             send_controls="bottom_encoders",
         #         ),
         #     ),
         # )
 
-        track_selection = (
-            AddLayerMode(
-                mixer,
-                Layer(
-                    track_select_buttons="top_buttons",
-                ),
-            ),
-        )
-
+        # track_selection = (
+        #     AddLayerMode(
+        #         mixer,
+        #         Layer(
+        #             track_select_buttons="top_buttons",
+        #         ),
+        #     ),
+        # )
 
         # box_navigation = (
         #     AddLayerMode(
@@ -288,28 +246,28 @@ class MGTwister2(ControlSurface):
         #     ),
         # )
 
-        self._mixer_modes.add_mode(
-            "volume",
-            CompoundMode(
-                AddLayerMode(
-                    mixer,
-                    Layer(
-                        volume_controls="encoders_top2",
-                    ),
-                ),
-                # track_selection,
-                # selected_track_controls,
-                # box_navigation,
-            ),
-            # cycle_mode_button_color="Mode.Volume.On",
-        )
+        # self._mixer_modes.add_mode(
+        #     "volume",
+        #     CompoundMode(
+        #         AddLayerMode(
+        #             mixer,
+        #             Layer(
+        #                 volume_controls="top_encoders",
+        #             ),
+        #         ),
+        #         track_selection,
+        #         selected_track_controls,
+        #         box_navigation,
+        #     ),
+        #     # cycle_mode_button_color="Mode.Volume.On",
+        # )
         # self._mixer_modes.add_mode(
         #     "pan",
         #     CompoundMode(
         #         AddLayerMode(
         #             mixer,
         #             Layer(
-        #                 pan_controls="encoders_top2",
+        #                 pan_controls="top_encoders",
         #             ),
         #         ),
         #         track_selection,
@@ -318,8 +276,8 @@ class MGTwister2(ControlSurface):
         #     ),
         #     # cycle_mode_button_color="Mode.Pan.On",
         # )
-        self._mixer_modes.selected_mode = "volume"
-        self._mixer_modes.set_enabled(False)
+        # self._mixer_modes.selected_mode = "volume"
+        # self._mixer_modes.set_enabled(False)
 
     def _create_component(self, name, component_mappings):
         should_enable = component_mappings.pop('enable', True)
@@ -344,13 +302,17 @@ class MGTwister2(ControlSurface):
         component = self.component_map[name]
         mode_control_layer = {}
         for mode_or_control_name, mode_or_element in modes_config.items():
+            log(f"mode/control {mode_or_control_name} {mode_or_element}")
             if isinstance(mode_or_element, str):
+                log("string mode")
                 mode_control_layer[mode_or_control_name] = mode_or_element
                 continue
             else:
+                log("adding mode")
                 self._add_mode(mode_or_control_name, mode_or_element, component)
 
         component.layer = Layer(**mode_control_layer)
+        log("set selected mode")
         if component.selected_mode is None:
             component.selected_mode = component.modes[0]
         component.set_enabled(should_enable)
@@ -367,3 +329,13 @@ class MGTwister2(ControlSurface):
             else:
                 mode = self._create_mode_part(mode_spec)
         modes_component.add_mode(mode_name, mode, behaviour=behaviour, selector=selector)
+
+    def _create_mode_part(self, mode_mappings):
+        log(f"create mode part {mode_mappings}")
+        if isinstance(mode_mappings, dict):
+            component = self.component_map[mode_mappings.pop('component')]
+            if mode_mappings:
+                return EnablingAddLayerMode(component=component,
+                  layer=Layer(**mode_mappings))
+            return component
+        return mode_mappings
