@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 def log(msg):
     logger.info(f"MGTwister2: {msg}")
 
+def f(self, mode_name):
+    out = '{}.{}'.format(self.name.title().replace('_', ''), mode_name.title().replace('_', ''))
+    log(f"mode name {self}, {mode_name}: {out}")
+    return out
+
+ModesComponent._get_mode_color_base_name = f
+
 class RGB(object):
     OFF = SimpleColor(0)
 
@@ -55,25 +62,38 @@ class Colors(object):
         ArmOff = RGB.OFF
         SoloOn = RGB.DARK_BLUE
         SoloOff = RGB.OFF
-        TrackSelected = RGB.RED
-        TrackNotSelected = RGB.ORANGE
+        Selected = RGB.RED
+        NotSelected = RGB.ORANGE
+        NoTrack = RGB.OFF
+
+    class Session(object):
+        Navigation = RGB.DARK_BLUE
+        NavigationPressed = RGB.LIGHT_BLUE
 
     class Device(object):
         Navigation = RGB.ORANGE
         NavigationPressed = RGB.RED
 
-    class Mode(object):
-        class Volume(object):
+    class Mixermode(object):
+        class Volumemode(object):
             On = RGB.LIGHT_BLUE
-            # Off = RGB.OFF
-
-        class Pan(object):
+            Off = RGB.OFF
+        class Panmode(object):
             On = RGB.PURPLE
-            # Off = RGB.OFF
+            Off = RGB.OFF
 
-        class MixerMode(object):
-            On = RGB.ORANGE
-            Off = RGB.RED
+    # class Mode(object):
+    #     class Volume(object):
+    #         On = RGB.LIGHT_BLUE
+    #         # Off = RGB.OFF
+
+    #     class Pan(object):
+    #         On = RGB.PURPLE
+    #         # Off = RGB.OFF
+
+    #     class MixerMode(object):
+    #         On = RGB.ORANGE
+    #         Off = RGB.RED
 
 
 class TwisterElements(ElementsBase):
@@ -95,8 +115,8 @@ class TwisterElements(ElementsBase):
             ids.append([])
             for col in range(4):
                 ids[-1].append(col+4*row)
-                self.add_encoder(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=0)
-                self.add_button(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=1)
+                # self.add_encoder(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=0)
+                # self.add_button(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=1)
 
         self.add_encoder_matrix(
             identifiers=ids,
@@ -125,22 +145,63 @@ def create_mappings(control_surface):
     #     "num_scenes": control_surface.specification.num_scenes,
     #     "enable": True,
     # }
-    mappings["Mixer"] = {
+    mappings["Mixer"] = {}
+    # mappings["Target_Track"] = {}
+    # mappings["Session_Navigation"] = {}
+    # mappings["Session_Ring"] = {}
+
+    session_nav = lambda: {
+        "component": "Session_Navigation",
+        "page_left_button": "buttons_raw[13]",
+        "page_right_button": "buttons_raw[14]",
     }
+    cycle_mixer_mode = lambda: {
+        "component": "MixerMode",
+        "cycle_mode_button": "buttons_raw[12]",
+    }
+
+    select_tracks = lambda: {
+        "component": "Mixer",
+        "track_select_buttons": "top_buttons",
+        "target_track_send_controls": "bottom_encoders",
+        "target_track_mute_button": "buttons_raw[8]",
+        "target_track_solo_button": "buttons_raw[9]",
+        "target_track_arm_button": "buttons_raw[10]",
+    }
+
+
     mappings["MixerMode"] = {
         "modes_component_type": ModesComponent,
-        "enable": True,
+        # "enable": True,
         "VolumeMode": {
-            "component": "Mixer",
-            "volume_controls": "top_encoders"
-        }
+            "modes": [
+                {
+                    "component": "Mixer",
+                    "volume_controls": "top_encoders",
+                },
+                select_tracks(),
+                session_nav(),
+                cycle_mixer_mode(),
+            ]
+        },
+        "PanMode": {
+            "modes": [
+                {
+                    "component": "Mixer",
+                    "pan_controls": "top_encoders",
+                },
+                select_tracks(),
+                session_nav(),
+                cycle_mixer_mode(),
+            ]
+        },
     }
     return mappings
 
-def create_compoment_map():
+def create_component_map():
     return {
         # "Mixer": partial(MixerComponent, session_ring=SessionRingComponent(),
-    #     "Session_Ring": SessionRingComponent,
+        # "Session_Ring": SessionRingComponent,
     #     # "Session": SessionComponent,
     }
 
@@ -148,10 +209,11 @@ class Specification(ControlSurfaceSpecification):
     elements_type = TwisterElements
     num_tracks = 8
     num_scenes = 1
-    link_session_ring_to_track_selection = False
+    link_session_ring_to_track_selection = True
+    link_session_ring_to_scene_selection = True
     control_surface_skin = Skin(Colors)
     parameter_bank_size = 16
-    component_map = create_compoment_map()
+    component_map = create_component_map()
     create_mappings_function = create_mappings
 
 
@@ -312,8 +374,8 @@ class MGTwister2(ControlSurface):
                 self._add_mode(mode_or_control_name, mode_or_element, component)
 
         component.layer = Layer(**mode_control_layer)
-        log("set selected mode")
         if component.selected_mode is None:
+            log(f"set selected mod {component.modes[0]}")
             component.selected_mode = component.modes[0]
         component.set_enabled(should_enable)
 
