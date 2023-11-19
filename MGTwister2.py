@@ -1,64 +1,45 @@
 import logging
-from contextlib import contextmanager
-from future.moves.itertools import zip_longest
+from functools import partial
 
-import Live
-
-import math
-
-from ableton.v2.base import const, inject, nop, depends, listens, liveobj_valid
-from ableton.v2.control_surface import ControlSurface, Skin, Layer, BankingInfo
-from ableton.v2.control_surface.device_parameter_bank import MaxDeviceParameterBank, DescribedDeviceParameterBank, DeviceParameterBank
-from ableton.v2.control_surface.elements import Color
-# from ableton.v3.control_surface.components.device_bank_navigation import DeviceBankNavigationComponent as DeviceBankNavigationComponentV3
-from ableton.v2.control_surface import MIDI_CC_TYPE, MIDI_NOTE_TYPE, ParameterProvider
-from ableton.v2.control_surface.control import ButtonControl
-from ableton.v2.control_surface.components import (
+from ableton.v3.base import listens
+from ableton.v3.control_surface import (
+    ControlSurface,
+    ControlSurfaceSpecification,
+    ElementsBase,
+    MapMode,
+    Layer,
+    Skin,
+    MIDI_CC_TYPE,
+)
+from ableton.v3.control_surface.elements import SimpleColor, EncoderElement, ButtonElement, ButtonMatrixElement
+from ableton.v3.control_surface.components import (
+    MixerComponent,
+    SessionRingComponent,
     SessionComponent,
     DeviceComponent,
-    DeviceNavigationComponent,
-    DeviceParameterComponent,
-    SessionRecordingComponent,
-    SessionRingComponent,
-    SessionNavigationComponent,
-    SimpleTrackAssigner,
-    ChannelStripComponent,
-    MixerComponent,
+    ViewControlComponent,
+    SimpleDeviceNavigationComponent,
 )
-from ableton.v2.control_surface.elements import (
-    ButtonElement,
-    EncoderElement,
-    ButtonMatrixElement,
-    SliderElement,
-    SysexElement,
-)
-from ableton.v2.control_surface.mode import (
-    ModesComponent,
-    EnablingMode,
-    EnablingModesComponent,
-    LayerMode,
-    AddLayerMode,
-    CompoundMode,
-)
-from novation.simple_device import SimpleDeviceParameterComponent
-from novation.simple_device_navigation import SimpleDeviceNavigationComponent
+from ableton.v3.control_surface.mode import ModesComponent, AddLayerMode, CompoundMode
 
 logger = logging.getLogger(__name__)
 
+def log(msg):
+    logger.info(f"MGTwister2: {msg}")
 
 class RGB(object):
-    OFF = Color(0)
+    OFF = SimpleColor(0)
 
-    DARK_BLUE = Color(1)
-    LIGHT_BLUE = Color(25)
-    TURQUOISE = Color(37)
-    GREEN = Color(43)
-    YELLOW = Color(61)
-    ORANGE = Color(69)
-    RED = Color(78)
-    PINK = Color(97)
-    PURPLE = Color(113)
-    AQUA = Color(127)
+    DARK_BLUE = SimpleColor(1)
+    LIGHT_BLUE = SimpleColor(25)
+    TURQUOISE = SimpleColor(37)
+    GREEN = SimpleColor(43)
+    YELLOW = SimpleColor(61)
+    ORANGE = SimpleColor(69)
+    RED = SimpleColor(78)
+    PINK = SimpleColor(97)
+    PURPLE = SimpleColor(113)
+    AQUA = SimpleColor(127)
 
 
 class Colors(object):
@@ -94,424 +75,295 @@ class Colors(object):
             On = RGB.ORANGE
             Off = RGB.RED
 
-def custom_create_device_bank(device, banking_info):
-    bank = None
-    if liveobj_valid(device):
-        if banking_info.has_bank_count(device):
-            bank_class = MaxDeviceParameterBank
-        else:
-            if banking_info.device_bank_definition(device) is not None:
-                bank_class = DescribedDeviceParameterBank
-            else:
-                bank_class = DeviceParameterBank
-        bank = bank_class(device=device, size=16, banking_info=banking_info)
-    return bank
-            
-class CustomEncoder(EncoderElement):
-    def release_parameter(self):
-        super().release_parameter()
-        self.reset()
 
-class CustomButton(ButtonElement):
-    def release_parameter(self):
-        super().release_parameter()
-        self.reset()
-        
+class TwisterElements(ElementsBase):
 
-class CustomDeviceComponent(DeviceComponent):
+    # def reset_leds(self):
+    #     for btn_row in self.buttons:
+    #         for btn in btn_row:
+    #             btn.reset()
 
-    next_bank_button = ButtonControl(color='Device.Navigation',
-      pressed_color='Device.NavigationPressed')
-    prev_bank_button = ButtonControl(color='Device.Navigation',
-      pressed_color='Device.NavigationPressed')
-
-    def _create_parameter_info(self, parameter, name):
-        logger.info(f"custom device {parameter} {name}")
-        return parameter
-
-    def _current_bank_details(self):
-        logger.info(f"current bank detail: {self._bank}")
-        if self._bank is not None:
-            logger.info(f"bank name {self._bank.name} {self._bank.parameters}")
-        if self._bank is not None:
-            return (self._bank.name, self._bank.parameters)
-        return (
-         '', [None] * 16)
-
-    @next_bank_button.pressed
-    def next_bank_button(self, value):
-        logger.info(f"pressed_next_bank")
-
-    @prev_bank_button.pressed
-    def prev_bank_button(self, value):
-        logger.info(f"pressed_prev_bank")
-
-    def _setup_bank(self, device, bank_factory=custom_create_device_bank):
-        if self._bank is not None:
-            self.disconnect_disconnectable(self._bank)
-            self._bank = None
-        if liveobj_valid(device):
-            self._bank = self.register_disconnectable(bank_factory(device, self._banking_info))
-
-class CustomDeviceParameterComponent(DeviceParameterComponent):
-    controls = None
-
-    def set_parameter_controls(self, encoder_matrix):
-        self.controls = encoder_matrix
-        self._connect_parameters()
-
-    def _connect_parameters(self):
-        if self.controls is None:
-            logger.info("no controls, not connecting")
-            return
-        logger.info(f"connecting {self.controls} {len(self.controls)}")
-        print("provider params:", self._parameter_provider.parameters, len(self._parameter_provider.parameters))
-        parameters = self._parameter_provider.parameters[:len(self.controls)]
-        logger.info(f"provider {self._parameter_provider} params: {len(parameters)}")
-
-        for control, parameter in zip_longest(self.controls, parameters):
-            if liveobj_valid(control):
-                logger.info(f"valid control {control}")
-                if liveobj_valid(parameter):
-                    logger.info(f"valid param {parameter}, connecting to {control}")
-                    control.connect_to(parameter)
-                else:
-                    logger.info(f"invalid param {parameter}, releasing {control}")
-                    control.release_parameter()
-            else:
-                logger.info(f"valid control {control}")
-
-
-@depends(skin=None)
-def create_button(page, x, y, is_momentary=True, **k):
-    """Get the button at (x, y) on page <page>.
-
-    The MF Twister has 4 pages of encoders with 4x4 controls for each page.
-
-    ---------------
-    |  0  1  2  3 |
-    |  4  5  6  7 |
-    |  8  9 10 11 |
-    | 12 13 14 15 |
-    ---------------
-    """
-    assert page >= 0 and page < 4, "page should be in [0, 4["
-    assert x >= 0 and x < 4, "x coordinate should be in [0, 4["
-    assert y >= 0 and y < 4, "y coordinate should be in [0, 4["
-
-    cc = x + 4 * (y + 4 * page)
-
-    button = CustomButton(
-        is_momentary, MIDI_CC_TYPE, 1, cc, name=f"button_{x}_{y}", **k
-    )
-
-    logger.info(f"button {x} {y} set")
-
-    return button
-
-
-def create_encoder(page, x, y, **k):
-    """Get the encoder at (x, y) on page <page>.
-
-    The MF Twister has 4 pages of encoders with 4x4 controls for each page.
-
-    ---------------
-    |  0  1  2  3 |
-    |  4  5  6  7 |
-    |  8  9 10 11 |
-    | 12 13 14 15 |
-    ---------------
-    """
-    assert page >= 0 and page < 4, "page should be in [0, 4["
-    assert x >= 0 and x < 4, "x coordinate should be in [0, 4["
-    assert y >= 0 and y < 4, "y coordinate should be in [0, 4["
-
-    cc = x + 4 * (y + 4 * page)
-
-    ENCODER_CHANNEL = 0
-    MAP_MODE = Live.MidiMap.MapMode.absolute
-    encoder = CustomEncoder(
-        MIDI_CC_TYPE, ENCODER_CHANNEL, cc, MAP_MODE, name=f"encoder_{x}_{y}", **k
-    )
-
-    logger.info(f"Setting encoder {x},{y} on page {page} with cc {cc}")
-
-    return encoder
-
-
-class TwisterElements(object):
-    def reset_leds(self):
-        for btn_row in self.buttons:
-            for btn in btn_row:
-                btn.reset()
-
-        for enc_row in self.encoders:
-            for enc in enc_row:
-                enc.reset()
+    #     for enc_row in self.encoders:
+    #         for enc in enc_row:
+    #             enc.reset()
 
     def __init__(self, *a, **k):
-        (super().__init__)(*a, **k)
+        super().__init__(*a, **k)
 
-        self.buttons = []
-        self.encoders = []
-        for y in range(4):
-            buttons_row = []
-            encoders_row = []
-            for x in range(4):
-                btn = create_button(0, x, y)
-                enc = create_encoder(0, x, y)
-                setattr(self, f"button_{y}_{x}", btn)
-                setattr(self, f"encoder_{y}_{x}", btn)
-                buttons_row.append(btn)
-                encoders_row.append(enc)
-            self.buttons.append(buttons_row)
-            self.encoders.append(encoders_row)
+        ids = []
+        for row in range(4):
+            ids.append([])
+            for col in range(4):
+                ids[-1].append(row+4*col)
+                self.add_encoder(identifier=ids[-1][-1], name="button_{col}_{row}", channel=0)
+                self.add_button(identifier=ids[-1][-1], name="button_{col}_{row}", channel=1)
 
-        self.buttons_matrix = ButtonMatrixElement(
-            rows=self.buttons,
-            name="buttons_matrix",
+        # Encoders 1-8
+        self.add_encoder_matrix(
+            identifiers=ids,
+            base_name="encoders",
+            channels=0,
+            # map_mode=MapMode.Absolute,
         )
+        self.add_submatrix(self.encoders, "top_encoders", columns=(0, 4), rows=(0, 2))
+        self.add_submatrix(self.encoders, "bottom_encoders", columns=(0, 4), rows=(2, 4))
 
-        self.encoders_matrix = ButtonMatrixElement(
-            rows=self.encoders,
-            name="encoders_matrix",
+
+        self.add_button_matrix(
+            identifiers=ids,
+            base_name="buttons",
+            channels=1,
+            # map_mode=MapMode.Absolute,
         )
+        self.add_submatrix(self.buttons, "top_buttons", columns=(0, 4), rows=(0, 2))
+        self.add_submatrix(self.buttons, "bottom_buttons", columns=(0, 4), rows=(2, 4))
 
-        for y in range(1, 4):
-            mtx = ButtonMatrixElement(
-                rows=self.encoders[:y],
-                name=f"encoders_top{y}",
-            )
-            setattr(self, f"encoders_top{y}", mtx)
+        log(f"Elements methods: {dir(self)}")
+        log(f"RAW encoders: {self.encoders_raw}")
+        # self.add_submatrix(self.encoders, "encoders_top", columns=(0, 8))
 
-            mtx = ButtonMatrixElement(
-                rows=self.buttons[:y],
-                name=f"buttons_top{y}",
-            )
-            setattr(self, f"buttons_top{y}", mtx)
+        # self.buttons = []
+        # self.encoders = []
+        # for y in range(4):
+        #     buttons_row = []
+        #     encoders_row = []
+        #     for x in range(4):
+        #         btn = create_button(0, x, y)
+        #         enc = create_encoder(0, x, y)
+        #         setattr(self, f"button_{y}_{x}", btn)
+        #         setattr(self, f"encoder_{y}_{x}", btn)
+        #         buttons_row.append(btn)
+        #         encoders_row.append(enc)
+        #     self.buttons.append(buttons_row)
+        #     self.encoders.append(encoders_row)
 
-            mtx = ButtonMatrixElement(
-                rows=self.encoders[4 - y :],
-                name=f"encoders_bottom{y}",
-            )
-            setattr(self, f"encoders_bottom{y}", mtx)
+        # self.buttons_matrix = ButtonMatrixElement(
+        #     rows=self.buttons,
+        #     name="buttons_matrix",
+        # )
 
-            mtx = ButtonMatrixElement(
-                rows=self.buttons[4 - y :],
-                name=f"buttons_bottom{y}",
-            )
-            setattr(self, f"buttons_bottom{y}", mtx)
+        # self.encoders_matrix = ButtonMatrixElement(
+        #     rows=self.encoders,
+        #     name="encoders_matrix",
+        # )
+
+        # for y in range(1, 4):
+        #     mtx = ButtonMatrixElement(
+        #         rows=self.encoders[:y],
+        #         name=f"encoders_top{y}",
+        #     )
+        #     setattr(self, f"encoders_top{y}", mtx)
+
+        #     mtx = ButtonMatrixElement(
+        #         rows=self.buttons[:y],
+        #         name=f"buttons_top{y}",
+        #     )
+        #     setattr(self, f"buttons_top{y}", mtx)
+
+        #     mtx = ButtonMatrixElement(
+        #         rows=self.encoders[4 - y :],
+        #         name=f"encoders_bottom{y}",
+        #     )
+        #     setattr(self, f"encoders_bottom{y}", mtx)
+
+        #     mtx = ButtonMatrixElement(
+        #         rows=self.buttons[4 - y :],
+        #         name=f"buttons_bottom{y}",
+        #     )
+        #     setattr(self, f"buttons_bottom{y}", mtx)
+
+def create_mappings(control_surface):
+    mappings = {}
+    # mappings["Session_Ring"] = {
+    #     "num_tracks": control_surface.specification.num_tracks,
+    #     "num_scenes": control_surface.specification.num_scenes,
+    #     "enable": True,
+    # }
+    # mappings["Mixer"] = {
+    # }
+    return mappings
+
+def create_compoment_map():
+    return {
+        # "Mixer": partial(MixerComponent, session_ring=SessionRingComponent(),
+    #     "Session_Ring": SessionRingComponent,
+    #     # "Session": SessionComponent,
+    }
+
+class Specification(ControlSurfaceSpecification):
+    elements_type = TwisterElements
+    num_tracks = 8
+    num_scenes = 1
+    link_session_ring_to_track_selection = False
+    control_surface_skin = Skin(Colors)
+    parameter_bank_size = 16
+    component_map = create_compoment_map()
+    create_mappings_function = create_mappings
 
 
 class MGTwister2(ControlSurface):
-    skin = Skin(Colors)
 
-    def __init__(self, *a, num_tracks=8, **k):
-        super().__init__(*a, **k)
+    def __init__(self, c_instance):
+        super().__init__(c_instance=c_instance, specification=Specification)
+        log(f"components: {self.components}")
 
-        self._element_injector = inject(element_container=(const(None))).everywhere()
+    # def setup(self):
+    #     super().setup()
+    #     log("Setup")
 
-        self.num_tracks = num_tracks
+    #     self._create_mixer()
 
-        with self.component_guard():
-            with inject(skin=(const(self.skin))).everywhere():
-                self._elements = TwisterElements()
-        self._element_injector = inject(
-            element_container=(const(self._elements))
-        ).everywhere()
+    #     # # create components
+    #     # self._create_device_parameters()
+    #     # self._create_view_control()
+    #     # self._create_device_navigation()
 
-        with self.component_guard():
-            self._create_components()
+    #     # # create modes
+    #     # self._create_modes()
 
-        self.show_message("MGTwister2 active")
+    #     # self.set_can_update_controlled_track(True)
 
-    @contextmanager
-    def _component_guard(self):
-        with super()._component_guard():
-            with self._element_injector:
-                yield
+    #     self.show_message("MGTwister2 v3 active")
 
-    def _create_components(self):
-        self._create_session()
+    def setup(self):
+        log("Setup")
+        self.component_map['Background'] = self._background
+        self.component_map['Target_Track'] = self._target_track
+        # log(f"Compoment map {self.component_map}")
+        log(f"Compoment names {self.component_map.keys()}")
+        mappings = self.specification.create_mappings_function(self)
+        log(f"mappings {mappings.keys()}")
+        component_names = self.component_map.keys()
+        for name in list(mappings.keys()):
+            if name in component_names:
+                self._create_component(name, mappings.pop(name))
 
-        self._create_mixer()
-        self._create_device()
-        self._create_modes()
+        for name, section in mappings.items():
+            if name not in component_names:
+                self._create_modes_component(name, section)
 
-        # self._global_modes.add_mode(
-        #     "mixer_mode", AddLayerMode(self._mixer_modes, Layer(enabled=True))
-        # )
+        for name, section in mappings.items():
+            self._setup_modes_component(name, section)
 
-    def _create_device(self):
-        self._device = CustomDeviceComponent(
-            banking_info=BankingInfo({}), device_bank_registry=self._device_bank_registry)
-        # self._bank_nav = DeviceBankNavigationComponentV3(device_bank_registry=self._device_bank_registry)
-        self._device_parameters = CustomDeviceParameterComponent(
-            parameter_provider=self._device,
-            name="Device_Parameters_Component",
-        )
+        log(f"Mixer: {self.component_map['Mixer']} {dir(self.component_map['Mixer'])}")
 
-        # self._device_navigation = DeviceNavigationComponent(self._device)
-        self._device_navigation = SimpleDeviceNavigationComponent()
-
-        # logger.info(f"old provider: {self._device_parameters.parameter_provider}")
-        # self._device_parameters.parameter_provider = self._device
-        # self._device_parameters = SimpleDeviceParameterComponent(
-        #     name="Device_Parameters_Component"
-        # )
-        # logger.info(f"Created device {type(self.device_provider)}")
-
-        # TODO(bank next buttons)
-
-    def _create_modes(self):
-        self._global_modes = ModesComponent(
-            name="global_modes",
-            is_enabled=False,
-            layer=Layer(cycle_mode_button="button_3_3"),
-        )
-        self._global_modes.add_mode(
-            "mixer_controls",
-            CompoundMode(
-                lambda: self._elements.reset_leds(),
-                EnablingMode(self._mixer_modes),
-            ),
-            cycle_mode_button_color="Mode.MixerMode.On",
-        )
-        self._global_modes.add_mode(
-            "device_controls",
-            CompoundMode(
-                lambda: self._elements.reset_leds(),
-                AddLayerMode(
-                    self._device_parameters,
-                    Layer(
-                        parameter_controls="encoders_matrix",
-                    ),
-                ),
-                # AddLayerMode(
-                #     self._device,
-                #     Layer(
-                #         prev_bank_button="button_2_1",
-                #         next_bank_button="button_2_2",
-                #     ),
-                # ),
-                # AddLayerMode(
-                #     self._bank_nav,
-                #     Layer(
-                #         prev_bank_button="button_2_1",
-                #         next_bank_button="button_2_2",
-                #     ),
-                # ),
-                AddLayerMode(
-                    self._device_navigation,
-                    Layer(
-                        prev_button="button_3_1",
-                        next_button="button_3_2",
-                    ),
-                ),
-            ),
-            cycle_mode_button_color="Mode.MixerMode.Off",
-        )
-        self._global_modes.selected_mode = "mixer_controls"
-        self._global_modes.set_enabled(True)
-
-    def _create_session(self):
-        self._session_ring = SessionRingComponent(
-            name="Session_Ring",
-            is_enabled=True,
-            num_tracks=self.num_tracks,
-            num_scenes=1,
-        )
-        self._session = SessionComponent(
-            name="Session",
-            is_enabled=True,
-            session_ring=(self._session_ring),
-        )
-        self._session_navigation = SessionNavigationComponent(
-            name="Session_Navigation",
-            is_enabled=True,
-            session_ring=(self._session_ring),
-        )
-        self._session_navigation.set_enabled(True)
-
-    def _create_mixer(self):
-        # TODO(mgharbi): clear LED when track is deleted
-        self._mixer = MixerComponent(
-            name="Mixer",
-            auto_name=True,
-            tracks_provider=(self._session_ring),
-            invert_mute_feedback=False,
-            channel_strip_component_type=ChannelStripComponent,
-        )
+        mixer = self.component_map["Mixer"]
+        session_navigation = self.component_map["Session_Navigation"]
 
         self._mixer_modes = ModesComponent(
             name="mixer_modes",
             is_enabled=False,
-            layer=Layer(cycle_mode_button="button_3_0"),
+            # layer=Layer(cycle_mode_button="button_3_0"),
         )
 
-        selected_track_controls = (
-            AddLayerMode(
-                self._mixer.selected_strip(),
-                Layer(
-                    mute_button="button_2_0",
-                    solo_button="button_2_1",
-                    arm_button="button_2_2",
-                    send_controls="encoders_bottom2",
-                ),
-            ),
-        )
+        # selected_track_controls = (
+        #     AddLayerMode(
+        #         mixer.target_strip,
+        #         Layer(
+        #             mute_button="button_2_0",
+        #             solo_button="button_2_1",
+        #             arm_button="button_2_2",
+        #             send_controls="encoders_bottom2",
+        #         ),
+        #     ),
+        # )
+
         track_selection = (
             AddLayerMode(
-                self._mixer,
+                mixer,
                 Layer(
-                    track_select_buttons="buttons_top2",
+                    track_select_buttons="top_buttons",
                 ),
             ),
         )
 
-        box_navigation = (
-            AddLayerMode(
-                self._session_navigation,
-                layer=Layer(
-                    page_left_button="button_3_1",
-                    page_right_button="button_3_2",
-                ),
-            ),
-        )
+
+        # box_navigation = (
+        #     AddLayerMode(
+        #         session_navigation,
+        #         layer=Layer(
+        #             page_left_button="button_3_1",
+        #             page_right_button="button_3_2",
+        #         ),
+        #     ),
+        # )
 
         self._mixer_modes.add_mode(
             "volume",
             CompoundMode(
                 AddLayerMode(
-                    self._mixer,
+                    mixer,
                     Layer(
                         volume_controls="encoders_top2",
                     ),
                 ),
-                track_selection,
-                selected_track_controls,
-                box_navigation,
+                # track_selection,
+                # selected_track_controls,
+                # box_navigation,
             ),
-            cycle_mode_button_color="Mode.Volume.On",
+            # cycle_mode_button_color="Mode.Volume.On",
         )
-        self._mixer_modes.add_mode(
-            "pan",
-            CompoundMode(
-                AddLayerMode(
-                    self._mixer,
-                    Layer(
-                        pan_controls="encoders_top2",
-                    ),
-                ),
-                track_selection,
-                selected_track_controls,
-                box_navigation,
-            ),
-            cycle_mode_button_color="Mode.Pan.On",
-        )
+        # self._mixer_modes.add_mode(
+        #     "pan",
+        #     CompoundMode(
+        #         AddLayerMode(
+        #             mixer,
+        #             Layer(
+        #                 pan_controls="encoders_top2",
+        #             ),
+        #         ),
+        #         track_selection,
+        #         selected_track_controls,
+        #         box_navigation,
+        #     ),
+        #     # cycle_mode_button_color="Mode.Pan.On",
+        # )
         self._mixer_modes.selected_mode = "volume"
         self._mixer_modes.set_enabled(False)
 
-    def disconnect(self):
-        super().disconnect()
+    def _create_component(self, name, component_mappings):
+        should_enable = component_mappings.pop('enable', True)
+        log(f"Creating component {name}, {component_mappings} enable? {should_enable}")
+        component = self.component_map[name]
+        component.layer = Layer(**component_mappings)
+        component.set_enabled(should_enable)
 
+    def _create_modes_component(self, name, modes_config):
+        log(f"Creating modes component {name}, {modes_config}")
+        modes_component_type = modes_config.pop('modes_component_type', ModesComponent)
+        component = modes_component_type(name=name,
+          is_enabled=False,
+          is_private=(modes_config.pop('is_private', False)),
+          default_behaviour=(modes_config.pop('default_behaviour', None)),
+          support_momentary_mode_cycling=(modes_config.pop('support_momentary_mode_cycling', True)))
+        self.component_map[name] = component
+
+    def _setup_modes_component(self, name, modes_config):
+        log(f"Setting up modes component {name}, {modes_config}")
+        should_enable = modes_config.pop('enable', True)
+        component = self.component_map[name]
+        mode_control_layer = {}
+        for mode_or_control_name, mode_or_element in modes_config.items():
+            if isinstance(mode_or_element, str):
+                mode_control_layer[mode_or_control_name] = mode_or_element
+                continue
+            else:
+                self._add_mode(mode_or_control_name, mode_or_element, component)
+
+        component.layer = Layer(**mode_control_layer)
+        if component.selected_mode is None:
+            component.selected_mode = component.modes[0]
+        component.set_enabled(should_enable)
+
+    def _add_mode(self, mode_name, mode_spec, modes_component):
+        log(f"Adding mode {mode_name} {mode_spec} {modes_component}")
+        is_dict = isinstance(mode_spec, dict)
+        behaviour = mode_spec.pop('behaviour', None) if is_dict else None
+        selector = mode_spec.pop('selector', None) if is_dict else None
+        mode = mode_spec
+        if is_dict:
+            if 'modes' in mode_spec:
+                mode = [self._create_mode_part(m) for m in mode_spec.pop('modes')]
+            else:
+                mode = self._create_mode_part(mode_spec)
+        modes_component.add_mode(mode_name, mode, behaviour=behaviour, selector=selector)
