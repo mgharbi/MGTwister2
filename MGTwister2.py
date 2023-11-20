@@ -242,9 +242,14 @@ class MGTwister2(ControlSurface):
         # log(f"can enable sess ring?: {self._can_enable_session_ring}")
         self._session_ring.set_enabled(True)
 
-    # def setup(self):
-    #     log("Base Setup")
-    #     # super().setup()
+    def setup(self):
+        super().setup()
+        device = self.component_map["Device"]
+        device._banking_info._num_simultaneous_banks = 1
+
+        log(f"banking info {device._banking_info}")
+        log(f"num sim {device._banking_info._num_simultaneous_banks}")
+        log(f"bank registry {self.device_bank_registry}")
 
     #     self.component_map['Background'] = self._background
     #     self.component_map['Target_Track'] = self._target_track
