@@ -1,10 +1,12 @@
 import logging
 from functools import partial
 
-from ableton.v3.base import listens
+# from ableton.v3 import midi
+from ableton.v3.base import listens, depends, listenable_property, nop, task
 from ableton.v3.control_surface import (
     ControlSurface,
     ControlSurfaceSpecification,
+    BankingInfo,
     ElementsBase,
     MapMode,
     Layer,
@@ -19,6 +21,7 @@ from ableton.v3.control_surface.components import (
     DeviceComponent,
     ViewControlComponent,
     SimpleDeviceNavigationComponent,
+    DeviceBankNavigationComponent,
 )
 from ableton.v3.control_surface.mode import ModesComponent, AddLayerMode, CompoundMode, EnablingAddLayerMode
 
@@ -27,12 +30,60 @@ logger = logging.getLogger(__name__)
 def log(msg):
     logger.info(f"MGTwister2: {msg}")
 
-def f(self, mode_name):
-    out = '{}.{}'.format(self.name.title().replace('_', ''), mode_name.title().replace('_', ''))
-    log(f"mode name {self}, {mode_name}: {out}")
-    return out
+# def f(self, mode_name):
+#     out = '{}.{}'.format(self.name.title().replace('_', ''), mode_name.title().replace('_', ''))
+#     log(f"mode name {self}, {mode_name}: {out}")
+#     return out
+# ModesComponent._get_mode_color_base_name = f
+# def create_responder(identity_response_id_bytes, custom_identity_response):
+#     if identity_response_id_bytes is not None:
+#         return StandardResponder(identity_response_id_bytes)
+#     if custom_identity_response[0] == midi.SYSEX_START:
+#         return CustomSysexResponder(custom_identity_response)
+#     return PlainMidiResponder(custom_identity_response)
 
-ModesComponent._get_mode_color_base_name = f
+# class IdentificationComponent(Component, Renderable):
+#     identity_response_control = InputControl()
+#     is_identified = listenable_property.managed(False)
+#     received_response_bytes = listenable_property.managed(None)
+
+#     @depends(send_midi=None)
+#     def __init__(self, name='Identification', identity_request=midi.SYSEX_IDENTITY_REQUEST_MESSAGE, identity_request_delay=0.0, identity_response_id_bytes=None, custom_identity_response=None, send_midi=None, *a, **k):
+#         (super().__init__)(a, name=name, **k)
+#         self._send_midi = send_midi
+#         self._identity_request = identity_request
+#         self._responder = create_responder(identity_response_id_bytes, custom_identity_response)
+#         response_element = self._responder.create_response_element()
+#         response_element.name = 'identity_control'
+#         response_element.is_private = True
+#         self.identity_response_control.set_control_element(response_element)
+#         self._request_task = self._tasks.add(task.sequence(task.run(self._send_identity_request), task.wait(identity_request_delay), task.run(self._send_identity_request)))
+#         self._request_task.kill()
+
+#     @identity_response_control.value
+#     def identity_response_control(self, response_bytes, _):
+#         try:
+#             if self._responder.is_valid_response(response_bytes):
+#                 self._request_task.kill()
+#                 self.identity_response_control.enabled = False
+#                 self.received_response_bytes = response_bytes
+#                 self.is_identified = True
+#                 self.notify(self.notifications.identify)
+#         except IdentityResponseError as e:
+#             try:
+#                 logger.error(e)
+#             finally:
+#                 e = None
+#                 del e
+
+#     def request_identity(self):
+#         self._request_task.restart()
+#         self.received_response_bytes = None
+#         self.is_identified = False
+
+#     def _send_identity_request(self):
+#         self.identity_response_control.enabled = True
+#         self._send_midi(self._identity_request)
 
 class RGB(object):
     OFF = SimpleColor(0)
@@ -71,10 +122,18 @@ class Colors(object):
         NavigationPressed = RGB.LIGHT_BLUE
 
     class Device(object):
-        Navigation = RGB.ORANGE
-        NavigationPressed = RGB.RED
+        Navigation = RGB.LIGHT_BLUE
+        NavigationPressed = RGB.DARK_BLUE
+        On = RGB.GREEN
+        Off = RGB.RED
+        LockOn = RGB.YELLOW
+        LockOff = RGB.DARK_BLUE
 
-    class Mixermode(object):
+        class Bank(object):
+            Navigation = RGB.DARK_BLUE
+            NavigationPressed = RGB.LIGHT_BLUE
+
+    class Mixermodes(object):
         class Volumemode(object):
             On = RGB.LIGHT_BLUE
             Off = RGB.OFF
@@ -82,30 +141,24 @@ class Colors(object):
             On = RGB.PURPLE
             Off = RGB.OFF
 
-    # class Mode(object):
-    #     class Volume(object):
-    #         On = RGB.LIGHT_BLUE
-    #         # Off = RGB.OFF
+    class Controlmodes(object):
+        class Mixingmode(object):
+            On = RGB.YELLOW
+            Off = RGB.OFF
 
-    #     class Pan(object):
-    #         On = RGB.PURPLE
-    #         # Off = RGB.OFF
-
-    #     class MixerMode(object):
-    #         On = RGB.ORANGE
-    #         Off = RGB.RED
+        class Devicemode(object):
+            On = RGB.ORANGE
+            Off = RGB.OFF
 
 
 class TwisterElements(ElementsBase):
 
-    # def reset_leds(self):
-    #     for btn_row in self.buttons:
-    #         for btn in btn_row:
-    #             btn.reset()
+    def reset_leds(self):
+        for btn in self.buttons_raw:
+            btn.reset()
 
-    #     for enc_row in self.encoders:
-    #         for enc in enc_row:
-    #             enc.reset()
+        for enc in self.encoders_raw:
+            enc.reset()
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
@@ -115,8 +168,6 @@ class TwisterElements(ElementsBase):
             ids.append([])
             for col in range(4):
                 ids[-1].append(col+4*row)
-                # self.add_encoder(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=0)
-                # self.add_button(identifier=ids[-1][-1], name=f"button_{col}_{row}", channel=1)
 
         self.add_encoder_matrix(
             identifiers=ids,
@@ -135,8 +186,6 @@ class TwisterElements(ElementsBase):
         self.add_submatrix(self.buttons, "top_buttons", columns=(0, 4), rows=(0, 2))
         self.add_submatrix(self.buttons, "bottom_buttons", columns=(0, 4), rows=(2, 4))
 
-        # log(f"Elements methods: {dir(self)}")
-        # log(f"RAW encoders: {self.encoders_raw}")
 
 def create_mappings(control_surface):
     mappings = {}
@@ -146,8 +195,11 @@ def create_mappings(control_surface):
     #     "enable": True,
     # }
     mappings["Mixer"] = {}
-    # mappings["Target_Track"] = {}
-    # mappings["Session_Navigation"] = {}
+    mappings["Device"] = {}
+    mappings["Device_Navigation"] = {}
+    mappings["Session"] = {}
+    mappings["Session_Overview"] = {}
+    mappings["Session_Navigation"] = {}
     # mappings["Session_Ring"] = {}
 
     session_nav = lambda: {
@@ -156,7 +208,7 @@ def create_mappings(control_surface):
         "page_right_button": "buttons_raw[14]",
     }
     cycle_mixer_mode = lambda: {
-        "component": "MixerMode",
+        "component": "MixerModes",
         "cycle_mode_button": "buttons_raw[12]",
     }
 
@@ -169,10 +221,8 @@ def create_mappings(control_surface):
         "target_track_arm_button": "buttons_raw[10]",
     }
 
-
-    mappings["MixerMode"] = {
+    mappings["MixerModes"] = {
         "modes_component_type": ModesComponent,
-        # "enable": True,
         "VolumeMode": {
             "modes": [
                 {
@@ -196,14 +246,53 @@ def create_mappings(control_surface):
             ]
         },
     }
+
+    cycle_control_mode = lambda: {
+        "component": "ControlModes",
+        "cycle_mode_button": "buttons_raw[12]",
+    }
+    mappings["ControlModes"] = {
+        "modes_component_type": ModesComponent,
+        "DeviceMode": {
+            "modes": [
+                cycle_control_mode(),
+                {
+                    "component": "Device_Navigation",
+                    "prev_button": "buttons_raw[13]",
+                    "next_button": "buttons_raw[14]",
+                },
+                {
+                    "component": "Device",
+                    "parameter_controls": "encoders",
+                    "prev_bank_button": "buttons_raw[9]",
+                    "next_bank_button": "buttons_raw[10]",
+                    "device_on_off_button": "buttons_raw[0]",
+                    "device_lock_button": "buttons_raw[1]",
+                },
+            ]
+        },
+        "MixingMode": {
+            "modes": [
+                cycle_control_mode(),
+                # {
+                #     "component": "Device_Navigation",
+                #     "prev_button": "buttons_raw[13]",
+                # }
+            ]
+        },
+    }
     return mappings
 
 def create_component_map():
     return {
+        # "Session":
         # "Mixer": partial(MixerComponent, session_ring=SessionRingComponent(),
         # "Session_Ring": SessionRingComponent,
+        # "Device_Bank_Navigation": DeviceBankNavigationComponent,
     #     # "Session": SessionComponent,
     }
+
+SYSEX_START = 240
 
 class Specification(ControlSurfaceSpecification):
     elements_type = TwisterElements
@@ -215,6 +304,8 @@ class Specification(ControlSurfaceSpecification):
     parameter_bank_size = 16
     component_map = create_component_map()
     create_mappings_function = create_mappings
+    custom_identity_response = bytes(SYSEX_START)
+
 
 
 class MGTwister2(ControlSurface):
@@ -223,6 +314,22 @@ class MGTwister2(ControlSurface):
         super().__init__(c_instance=c_instance, specification=Specification)
         log(f"components: {self.components}")
         self.set_can_update_controlled_track(True)
+        is_identifiable = self.specification.identity_response_id_bytes is not None or self.specification.custom_identity_response is not None
+        log(f"id?: {is_identifiable}")
+        log(f"id_resp_bytes {self.specification.identity_response_id_bytes}")
+        log(f"custom_id_response {self.specification.custom_identity_response }")
+        log(f"identified?: {self._identification.is_identified}")
+        log(f"can enable sess ring?: {self._can_enable_session_ring}")
+        self._session_ring.set_enabled(True)
+
+    @listens('is_identified')
+    def __on_is_identified_changed(self, is_identified):
+        log(f"ID changed {is_identified}")
+        if is_identified:
+            self.on_identified(self._identification.received_response_bytes)
+        if self._can_enable_session_ring:
+            self._session_ring.set_enabled(is_identified)
+        self._update_auto_arm()
 
     # def setup(self):
     #     super().setup()
@@ -264,82 +371,14 @@ class MGTwister2(ControlSurface):
         for name, section in mappings.items():
             self._setup_modes_component(name, section)
 
-        log(f"Mixer: {self.component_map['Mixer']} {dir(self.component_map['Mixer'])}")
-
-        mixer = self.component_map["Mixer"]
-        log(f"Mixer enabled? {mixer._is_enabled}")
-        mixer.set_enabled(True)
         session_navigation = self.component_map["Session_Navigation"]
+        log(f"Session Nav enabled? {session_navigation._is_enabled}")
 
-        # self._mixer_modes = ModesComponent(
-        #     name="mixer_modes",
-        #     is_enabled=False,
-        #     layer=Layer(cycle_mode_button="button_3_0"),
-        # )
-
-        # selected_track_controls = (
-        #     AddLayerMode(
-        #         mixer.target_strip,
-        #         Layer(
-        #             mute_button="button_2_0",
-        #             solo_button="button_2_1",
-        #             arm_button="button_2_2",
-        #             send_controls="bottom_encoders",
-        #         ),
-        #     ),
-        # )
-
-        # track_selection = (
-        #     AddLayerMode(
-        #         mixer,
-        #         Layer(
-        #             track_select_buttons="top_buttons",
-        #         ),
-        #     ),
-        # )
-
-        # box_navigation = (
-        #     AddLayerMode(
-        #         session_navigation,
-        #         layer=Layer(
-        #             page_left_button="button_3_1",
-        #             page_right_button="button_3_2",
-        #         ),
-        #     ),
-        # )
-
-        # self._mixer_modes.add_mode(
-        #     "volume",
-        #     CompoundMode(
-        #         AddLayerMode(
-        #             mixer,
-        #             Layer(
-        #                 volume_controls="top_encoders",
-        #             ),
-        #         ),
-        #         track_selection,
-        #         selected_track_controls,
-        #         box_navigation,
-        #     ),
-        #     # cycle_mode_button_color="Mode.Volume.On",
-        # )
-        # self._mixer_modes.add_mode(
-        #     "pan",
-        #     CompoundMode(
-        #         AddLayerMode(
-        #             mixer,
-        #             Layer(
-        #                 pan_controls="top_encoders",
-        #             ),
-        #         ),
-        #         track_selection,
-        #         selected_track_controls,
-        #         box_navigation,
-        #     ),
-        #     # cycle_mode_button_color="Mode.Pan.On",
-        # )
-        # self._mixer_modes.selected_mode = "volume"
-        # self._mixer_modes.set_enabled(False)
+        # session_ring = self.component_map["Session_Ring"]
+        # log(f"Session Ring enabled? {session_ring._is_enabled}")
+        # session_ring.num_tracks = self.specification.num_tracks
+        # session_ring.num_scenes = self.specification.num_scenes
+        # log(f"Session Ring num tracks {session_ring.num_tracks}, scenes {session_ring.num_scenes}")
 
     def _create_component(self, name, component_mappings):
         should_enable = component_mappings.pop('enable', True)
@@ -364,13 +403,11 @@ class MGTwister2(ControlSurface):
         component = self.component_map[name]
         mode_control_layer = {}
         for mode_or_control_name, mode_or_element in modes_config.items():
-            log(f"mode/control {mode_or_control_name} {mode_or_element}")
+            # log(f"mode/control {mode_or_control_name} {mode_or_element}")
             if isinstance(mode_or_element, str):
-                log("string mode")
                 mode_control_layer[mode_or_control_name] = mode_or_element
                 continue
             else:
-                log("adding mode")
                 self._add_mode(mode_or_control_name, mode_or_element, component)
 
         component.layer = Layer(**mode_control_layer)
@@ -401,3 +438,12 @@ class MGTwister2(ControlSurface):
                   layer=Layer(**mode_mappings))
             return component
         return mode_mappings
+
+    # def _create_identification(self, specification):
+    #     log("Creating ID")
+    #     identification = IdentificationComponent(identity_request=(specification.identity_request),
+    #       identity_request_delay=(specification.identity_request_delay),
+    #       identity_response_id_bytes=(specification.identity_response_id_bytes),
+    #       custom_identity_response=(specification.custom_identity_response))
+    #     self._ControlSurface__on_is_identified_changed.subject = identification
+    #     return identification
